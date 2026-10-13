@@ -1,0 +1,91 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum ReportType {
+  LOST
+  FOUND
+}
+
+enum ReportStatus {
+  ACTIVE
+  MATCH_FOUND
+  RESOLVED
+  CLOSED
+}
+
+model User {
+  id           String        @id @default(uuid())
+  name         String
+  email        String        @unique
+  password     String
+  profileImage String?
+  reports      ItemReport[]
+  refreshTokens RefreshToken[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Category {
+  id      String       @id @default(uuid())
+  name    String       @unique
+  reports ItemReport[]
+}
+
+model ItemReport {
+  id                  String       @id @default(uuid())
+  userId              String
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                ReportType
+  categoryId          String
+  category            Category     @relation(fields: [categoryId], references: [id])
+  itemName            String
+  brand               String?
+  color               String?
+  description         String
+  location            String
+  date                DateTime
+  approximateTime     String?
+  imageUrl            String?
+  identifyingFeatures String?
+  status              ReportStatus @default(ACTIVE)
+
+  lostMatches         Match[]      @relation("LostMatches")
+  foundMatches        Match[]      @relation("FoundMatches")
+
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([type, status])
+  @@index([categoryId])
+  @@index([itemName])
+}
+
+model Match {
+  id              String      @id @default(uuid())
+  lostReportId    String
+  lostReport      ItemReport  @relation("LostMatches", fields: [lostReportId], references: [id], onDelete: Cascade)
+  foundReportId   String
+  foundReport     ItemReport  @relation("FoundMatches", fields: [foundReportId], references: [id], onDelete: Cascade)
+  similarityScore Float
+  matchingFactors Json
+  createdAt       DateTime    @default(now())
+
+  @@unique([lostReportId, foundReportId])
+  @@index([lostReportId])
+  @@index([foundReportId])
+}
