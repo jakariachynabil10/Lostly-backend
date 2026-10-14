@@ -81,6 +81,10 @@ export class MatchingService {
             similarityScore: result.similarityScore,
             matchingFactors: result.matchingFactors as any,
           },
+          include: {
+            lostReport: { select: { id: true, userId: true, itemName: true } },
+            foundReport: { select: { id: true, userId: true, itemName: true } },
+          },
         });
 
         // Update status of reports if still ACTIVE

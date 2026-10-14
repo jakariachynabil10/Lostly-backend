@@ -15,20 +15,52 @@ enum ReportType {
 enum ReportStatus {
   ACTIVE
   MATCH_FOUND
+  CLAIM_PENDING
   RESOLVED
   CLOSED
 }
 
+enum ClaimStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  CANCELLED
+  COMPLETED
+}
+
+enum VerificationReviewStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum NotificationType {
+  MATCH_FOUND
+  CLAIM_RECEIVED
+  QUESTIONS_ADDED
+  ANSWERS_SUBMITTED
+  MORE_INFO_REQUESTED
+  CLAIM_APPROVED
+  CLAIM_REJECTED
+  CLAIM_CANCELLED
+  CLAIM_COMPLETED
+}
+
 model User {
-  id           String        @id @default(uuid())
-  name         String
-  email        String        @unique
-  password     String
-  profileImage String?
-  reports      ItemReport[]
-  refreshTokens RefreshToken[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id             String               @id @default(uuid())
+  name           String
+  email          String               @unique
+  password       String
+  profileImage   String?
+  reports        ItemReport[]
+  refreshTokens  RefreshToken[]
+  claimantClaims Claim[]              @relation("ClaimantClaims")
+  finderClaims   Claim[]              @relation("FinderClaims")
+  answers        VerificationAnswer[]
+  notifications  Notification[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 }
 
 model RefreshToken {
@@ -83,9 +115,74 @@ model Match {
   foundReport     ItemReport  @relation("FoundMatches", fields: [foundReportId], references: [id], onDelete: Cascade)
   similarityScore Float
   matchingFactors Json
+  claims          Claim[]
   createdAt       DateTime    @default(now())
 
   @@unique([lostReportId, foundReportId])
   @@index([lostReportId])
   @@index([foundReportId])
+}
+
+model Claim {
+  id          String                 @id @default(uuid())
+  matchId     String
+  match       Match                  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  claimantId  String
+  claimant    User                   @relation("ClaimantClaims", fields: [claimantId], references: [id], onDelete: Cascade)
+  finderId    String
+  finder      User                   @relation("FinderClaims", fields: [finderId], references: [id], onDelete: Cascade)
+  status      ClaimStatus            @default(PENDING)
+  reviewNotes String?
+  reviewedAt  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  questions   VerificationQuestion[]
+
+  @@index([matchId])
+  @@index([claimantId])
+  @@index([finderId])
+  @@index([status])
+}
+
+model VerificationQuestion {
+  id        String               @id @default(uuid())
+  claimId   String
+  claim     Claim                @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  question  String
+  createdAt DateTime             @default(now())
+
+  answers   VerificationAnswer[]
+
+  @@index([claimId])
+}
+
+model VerificationAnswer {
+  id           String                   @id @default(uuid())
+  questionId   String
+  question     VerificationQuestion     @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  claimantId   String
+  claimant     User                     @relation(fields: [claimantId], references: [id], onDelete: Cascade)
+  answer       String
+  reviewStatus VerificationReviewStatus @default(PENDING)
+  createdAt    DateTime                 @default(now())
+
+  @@index([questionId])
+  @@index([claimantId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])
+  @@index([userId])
 }

@@ -1,8 +1,9 @@
 import { prisma } from "../prisma";
 import { ReportFilterOptions } from "../types";
-import { ReportType, ReportStatus, Prisma } from "@prisma/client";
+import { ReportType, ReportStatus, Prisma, NotificationType } from "@prisma/client";
 import { AppError } from "../middleware/error.middleware";
 import { MatchingService } from "./matching.service";
+import { NotificationService } from "./notification.service";
 
 export interface CreateReportDTO {
   type: ReportType;
@@ -70,6 +71,37 @@ export class ReportService {
 
     // Run matching engine asynchronously or synchronously
     const matches = await MatchingService.runMatchingForReport(report.id);
+
+    // Notify both lost and found owners for matches of 75% or higher
+    for (const match of matches) {
+      if (match.similarityScore >= 75) {
+        const lostReportOwner = (match as any).lostReport?.userId;
+        const foundReportOwner = (match as any).foundReport?.userId;
+        const lostItemName = (match as any).lostReport?.itemName || report.itemName;
+        const foundItemName = (match as any).foundReport?.itemName || report.itemName;
+        const scorePct = Math.round(match.similarityScore);
+
+        if (lostReportOwner) {
+          await NotificationService.createNotification({
+            userId: lostReportOwner,
+            type: NotificationType.MATCH_FOUND,
+            title: `High Confidence Match Found (${scorePct}%)`,
+            message: `A found item "${foundItemName}" matches your lost "${lostItemName}" with ${scorePct}% similarity.`,
+            link: `/items/${(match as any).lostReport?.id || report.id}`,
+          });
+        }
+
+        if (foundReportOwner && foundReportOwner !== lostReportOwner) {
+          await NotificationService.createNotification({
+            userId: foundReportOwner,
+            type: NotificationType.MATCH_FOUND,
+            title: `High Confidence Match Found (${scorePct}%)`,
+            message: `A lost report for "${lostItemName}" matches your found "${foundItemName}" with ${scorePct}% similarity.`,
+            link: `/items/${(match as any).foundReport?.id || report.id}`,
+          });
+        }
+      }
+    }
 
     return {
       report,
