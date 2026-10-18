@@ -42,6 +42,40 @@ export class ClaimService {
     return new URL(path, ENV.FRONTEND_URL).toString();
   }
 
+  private static async runSerializableTransaction<T>(
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code !== "P2034" || attempt === 1) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private static async updateClaimStatus(
+    tx: Prisma.TransactionClient,
+    claimId: string,
+    allowedStatuses: ClaimStatus[],
+    data: Prisma.ClaimUpdateManyMutationInput,
+  ) {
+    const updated = await tx.claim.updateMany({
+      where: { id: claimId, status: { in: allowedStatuses } },
+      data,
+    });
+    if (updated.count !== 1) {
+      const error: AppError = new Error("Claim was modified, please refresh");
+      error.statusCode = 409;
+      throw error;
+    }
+    return tx.claim.findUniqueOrThrow({ where: { id: claimId } });
+  }
+
   /**
   * Helper to check if a report has any remaining active claims.
    */
@@ -152,7 +186,7 @@ export class ClaimService {
     // Execute race-sensitive checks and creation together.
     const finderId = match.foundReport.userId;
 
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await this.runSerializableTransaction(async (tx) => {
       const activeClaimsCount = await tx.claim.count({
         where: {
           claimantId,
@@ -436,7 +470,7 @@ export class ClaimService {
         }
 
         // Rule 8: Only one APPROVED claim per found report at a time
-        const updatedClaim = await prisma.$transaction(async (tx) => {
+        const updatedClaim = await this.runSerializableTransaction(async (tx) => {
           const existingApproved = await tx.claim.findFirst({
             where: {
               id: { not: claim.id },
@@ -453,14 +487,16 @@ export class ClaimService {
             throw err;
           }
 
-          return tx.claim.update({
-            where: { id: claim.id },
-            data: {
+          return this.updateClaimStatus(
+            tx,
+            claim.id,
+            [ClaimStatus.UNDER_REVIEW],
+            {
               status: ClaimStatus.APPROVED,
               reviewedAt: new Date(),
               reviewNotes: reviewNotes?.trim() || null,
             },
-          });
+          );
         });
 
         // Notify Claimant (CLAIM_APPROVED)
@@ -508,14 +544,16 @@ export class ClaimService {
 
         // Transaction: reject claim and revert reports if no other active claims
         const updatedClaim = await prisma.$transaction(async (tx) => {
-          const updated = await tx.claim.update({
-            where: { id: claim.id },
-            data: {
+          const updated = await this.updateClaimStatus(
+            tx,
+            claim.id,
+            [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW],
+            {
               status: ClaimStatus.REJECTED,
               reviewNotes: reviewNotes.trim(),
               reviewedAt: new Date(),
             },
-          });
+          );
 
           // Rule 7: Revert reports if no other active claim
           await this.revertReportStatusIfNeeded(
@@ -568,12 +606,14 @@ export class ClaimService {
 
         // Transaction: cancel claim and revert reports if no other active claims
         const updatedClaim = await prisma.$transaction(async (tx) => {
-          const updated = await tx.claim.update({
-            where: { id: claim.id },
-            data: {
+          const updated = await this.updateClaimStatus(
+            tx,
+            claim.id,
+            [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW],
+            {
               status: ClaimStatus.CANCELLED,
             },
-          });
+          );
 
           // Rule 7: Revert reports if no other active claim
           await this.revertReportStatusIfNeeded(
@@ -625,13 +665,15 @@ export class ClaimService {
         const { completedClaim, otherCancelledClaims } =
           await prisma.$transaction(async (tx) => {
             // 1. Mark this claim COMPLETED
-            const completed = await tx.claim.update({
-              where: { id: claim.id },
-              data: {
+            const completed = await this.updateClaimStatus(
+              tx,
+              claim.id,
+              [ClaimStatus.APPROVED],
+              {
                 status: ClaimStatus.COMPLETED,
                 completedAt: new Date(),
               },
-            });
+            );
 
             // 2. Mark both reports RESOLVED
             await tx.itemReport.update({
@@ -669,10 +711,17 @@ export class ClaimService {
               },
             });
 
-            if (otherClaims.length > 0) {
-              await tx.claim.updateMany({
+            for (const other of otherClaims) {
+              const cancelled = await tx.claim.updateMany({
                 where: {
-                  id: { in: otherClaims.map((c) => c.id) },
+                  id: other.id,
+                  status: {
+                    in: [
+                      ClaimStatus.PENDING,
+                      ClaimStatus.UNDER_REVIEW,
+                      ClaimStatus.APPROVED,
+                    ],
+                  },
                 },
                 data: {
                   status: ClaimStatus.CANCELLED,
@@ -680,6 +729,13 @@ export class ClaimService {
                     "Auto-cancelled: item has been returned and resolved in another claim.",
                 },
               });
+              if (cancelled.count !== 1) {
+                const error: AppError = new Error(
+                  "Claim was modified, please refresh",
+                );
+                error.statusCode = 409;
+                throw error;
+              }
             }
 
             const affectedReportIds = new Set<string>();

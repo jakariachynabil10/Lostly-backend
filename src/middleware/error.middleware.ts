@@ -23,10 +23,28 @@ export function errorHandler(
       (Array.isArray(target) &&
         target.includes("matchId") &&
         target.includes("claimantId")));
-  const statusCode = isActiveClaimDuplicate ? 409 : err.statusCode || 500;
-  const message = isActiveClaimDuplicate
-    ? "You already have an active claim for this match."
-    : err.message || "Internal server error";
+  const targetFields = Array.isArray(target)
+    ? target.join(",")
+    : String(target || "");
+  const isAnsweredQuestionDuplicate =
+    err.code === "P2002" &&
+    (String(meta?.constraint || "").includes(
+      "VerificationAnswer_questionId_key",
+    ) ||
+      targetFields.includes("VerificationAnswer_questionId_key") ||
+      targetFields === "questionId");
+  const statusCode =
+    isActiveClaimDuplicate || isAnsweredQuestionDuplicate
+      ? 409
+      : err.statusCode || 500;
+  const message =
+    statusCode >= 500
+      ? "Internal server error"
+      : isActiveClaimDuplicate
+        ? "You already have an active claim for this match."
+        : isAnsweredQuestionDuplicate
+          ? "This question has already been answered."
+          : err.message || "Internal server error";
 
   if (statusCode >= 500) {
     console.error("Unhandled request error:", { statusCode, code: err.code });
