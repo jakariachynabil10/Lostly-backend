@@ -1,6 +1,11 @@
 import { prisma } from "../prisma";
 import { ReportFilterOptions } from "../types";
-import { ReportType, ReportStatus, Prisma, NotificationType } from "@prisma/client";
+import {
+  ReportType,
+  ReportStatus,
+  Prisma,
+  NotificationType,
+} from "@prisma/client";
 import { AppError } from "../middleware/error.middleware";
 import { MatchingService } from "./matching.service";
 import { NotificationService } from "./notification.service";
@@ -64,7 +69,7 @@ export class ReportService {
       include: {
         category: true,
         user: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true },
         },
       },
     });
@@ -77,8 +82,10 @@ export class ReportService {
       if (match.similarityScore >= 75) {
         const lostReportOwner = (match as any).lostReport?.userId;
         const foundReportOwner = (match as any).foundReport?.userId;
-        const lostItemName = (match as any).lostReport?.itemName || report.itemName;
-        const foundItemName = (match as any).foundReport?.itemName || report.itemName;
+        const lostItemName =
+          (match as any).lostReport?.itemName || report.itemName;
+        const foundItemName =
+          (match as any).foundReport?.itemName || report.itemName;
         const scorePct = Math.round(match.similarityScore);
 
         if (lostReportOwner) {
@@ -164,7 +171,7 @@ export class ReportService {
         include: {
           category: true,
           user: {
-            select: { id: true, name: true, email: true },
+            select: { id: true, name: true },
           },
           _count: {
             select: {
@@ -200,7 +207,7 @@ export class ReportService {
       include: {
         category: true,
         user: {
-          select: { id: true, name: true, email: true, profileImage: true },
+          select: { id: true, name: true, profileImage: true },
         },
       },
     });
@@ -241,28 +248,39 @@ export class ReportService {
       data: {
         ...(data.itemName && { itemName: data.itemName.trim() }),
         ...(data.categoryId && { categoryId: data.categoryId }),
-        ...(data.brand !== undefined && { brand: data.brand ? data.brand.trim() : null }),
-        ...(data.color !== undefined && { color: data.color ? data.color.trim() : null }),
+        ...(data.brand !== undefined && {
+          brand: data.brand ? data.brand.trim() : null,
+        }),
+        ...(data.color !== undefined && {
+          color: data.color ? data.color.trim() : null,
+        }),
         ...(data.description && { description: data.description.trim() }),
         ...(data.location && { location: data.location.trim() }),
         ...(data.date && { date: new Date(data.date) }),
-        ...(data.approximateTime !== undefined && { approximateTime: data.approximateTime }),
+        ...(data.approximateTime !== undefined && {
+          approximateTime: data.approximateTime,
+        }),
         ...(data.imageUrl !== undefined && { imageUrl: data.imageUrl }),
         ...(data.identifyingFeatures !== undefined && {
-          identifyingFeatures: data.identifyingFeatures ? data.identifyingFeatures.trim() : null,
+          identifyingFeatures: data.identifyingFeatures
+            ? data.identifyingFeatures.trim()
+            : null,
         }),
         ...(data.status && { status: data.status }),
       },
       include: {
         category: true,
         user: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true },
         },
       },
     });
 
     // Re-run matching after edit if still active or matched
-    if (updated.status !== ReportStatus.RESOLVED && updated.status !== ReportStatus.CLOSED) {
+    if (
+      updated.status !== ReportStatus.RESOLVED &&
+      updated.status !== ReportStatus.CLOSED
+    ) {
       await MatchingService.runMatchingForReport(updated.id);
     }
 
@@ -293,7 +311,11 @@ export class ReportService {
     return { success: true };
   }
 
-  static async getUserReports(userId: string, type?: ReportType, status?: ReportStatus) {
+  static async getUserReports(
+    userId: string,
+    type?: ReportType,
+    status?: ReportStatus,
+  ) {
     const where: Prisma.ItemReportWhereInput = { userId };
     if (type) where.type = type;
     if (status) where.status = status;

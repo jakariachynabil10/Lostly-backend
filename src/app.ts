@@ -12,7 +12,7 @@ export const app = express();
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-  })
+  }),
 );
 
 // CORS configuration
@@ -26,7 +26,10 @@ app.use(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
       ];
-      if (allowedOrigins.includes(origin) || origin.startsWith("http://localhost:")) {
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.startsWith("http://localhost:")
+      ) {
         return callback(null, true);
       }
       return callback(null, true); // Permissive in dev
@@ -34,7 +37,7 @@ app.use(
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
 
 // Body parser
@@ -62,6 +65,7 @@ app.use((_req, res) => {
   res.status(404).json({
     success: false,
     message: "Endpoint not found",
+    errors: [],
   });
 });
 

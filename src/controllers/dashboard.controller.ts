@@ -3,10 +3,16 @@ import { DashboardService } from "../services/dashboard.service";
 import { AuthenticatedRequest } from "../types";
 
 export class DashboardController {
-  static async getStats(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async getStats(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const stats = await DashboardService.getStats(req.user.id);
@@ -19,10 +25,16 @@ export class DashboardController {
     }
   }
 
-  static async getRecentActivity(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async getRecentActivity(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const activity = await DashboardService.getRecentActivity(req.user.id);

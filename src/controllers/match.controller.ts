@@ -3,10 +3,17 @@ import { MatchingService } from "../services/matching.service";
 import { AuthenticatedRequest } from "../types";
 
 export class MatchController {
-  static async getMatchesForReport(req: Request, res: Response, next: NextFunction) {
+  static async getMatchesForReport(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { reportId } = req.params;
-      const matches = await MatchingService.getMatchesForReport(reportId);
+      const matches = await MatchingService.getMatchesForReport(
+        reportId,
+        (req as AuthenticatedRequest).user?.id,
+      );
       res.json({
         success: true,
         data: matches,
@@ -16,10 +23,16 @@ export class MatchController {
     }
   }
 
-  static async getMyMatches(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async getMyMatches(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const matches = await MatchingService.getUserMatches(req.user.id);
@@ -32,7 +45,11 @@ export class MatchController {
     }
   }
 
-  static async triggerMatching(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async triggerMatching(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       const { reportId } = req.params;
       const matches = await MatchingService.runMatchingForReport(reportId);

@@ -6,7 +6,7 @@ import { prisma } from "../prisma";
 export async function authMiddleware(
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   const authHeader = req.headers.authorization;
 
@@ -14,6 +14,7 @@ export async function authMiddleware(
     res.status(401).json({
       success: false,
       message: "Authorization token missing or invalid format",
+      errors: [],
     });
     return;
   }
@@ -37,6 +38,7 @@ export async function authMiddleware(
       res.status(401).json({
         success: false,
         message: "User associated with this token no longer exists",
+        errors: [],
       });
       return;
     }
@@ -47,14 +49,15 @@ export async function authMiddleware(
     if (error.name === "TokenExpiredError") {
       res.status(401).json({
         success: false,
-        code: "TOKEN_EXPIRED",
         message: "Session token has expired. Please refresh token.",
+        errors: [],
       });
       return;
     }
     res.status(401).json({
       success: false,
       message: "Invalid authentication token",
+      errors: [],
     });
   }
 }
@@ -62,7 +65,7 @@ export async function authMiddleware(
 export async function optionalAuthMiddleware(
   req: AuthenticatedRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ): Promise<void> {
   const authHeader = req.headers.authorization;
 

@@ -1,6 +1,6 @@
 import { prisma } from "../prisma";
 import { calculateReportSimilarity } from "../utils/similarity";
-import { ReportType, ReportStatus } from "@prisma/client";
+import { ClaimStatus, ReportType, ReportStatus } from "@prisma/client";
 
 export class MatchingService {
   static async runMatchingForReport(reportId: string) {
@@ -9,11 +9,16 @@ export class MatchingService {
       include: { category: true },
     });
 
-    if (!report || report.status === ReportStatus.RESOLVED || report.status === ReportStatus.CLOSED) {
+    if (
+      !report ||
+      report.status === ReportStatus.RESOLVED ||
+      report.status === ReportStatus.CLOSED
+    ) {
       return [];
     }
 
-    const oppositeType = report.type === ReportType.LOST ? ReportType.FOUND : ReportType.LOST;
+    const oppositeType =
+      report.type === ReportType.LOST ? ReportType.FOUND : ReportType.LOST;
 
     // Fetch candidate reports of opposite type
     const candidates = await prisma.itemReport.findMany({
@@ -24,7 +29,7 @@ export class MatchingService {
       include: {
         category: true,
         user: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true },
         },
       },
     });
@@ -59,7 +64,7 @@ export class MatchingService {
           location: foundReport.location,
           date: foundReport.date,
           imageUrl: foundReport.imageUrl,
-        }
+        },
       );
 
       // Threshold: >= 60% is considered a possible/strong match
@@ -108,7 +113,7 @@ export class MatchingService {
     return newMatches;
   }
 
-  static async getMatchesForReport(reportId: string) {
+  static async getMatchesForReport(reportId: string, userId?: string) {
     const matches = await prisma.match.findMany({
       where: {
         OR: [{ lostReportId: reportId }, { foundReportId: reportId }],
@@ -117,14 +122,17 @@ export class MatchingService {
         lostReport: {
           include: {
             category: true,
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
         },
         foundReport: {
           include: {
             category: true,
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
+        },
+        claims: {
+          select: { id: true, claimantId: true, finderId: true, status: true },
         },
       },
       orderBy: {
@@ -135,12 +143,29 @@ export class MatchingService {
     return matches.map((m) => {
       const isTargetLost = m.lostReportId === reportId;
       const counterpart = isTargetLost ? m.foundReport : m.lostReport;
+      const isClaimant = Boolean(userId && m.lostReport.userId === userId);
+      const isFinder = Boolean(userId && m.foundReport.userId === userId);
+      const activeClaim = isClaimant
+        ? m.claims.find(
+            (claim) =>
+              claim.claimantId === userId &&
+                (claim.status === ClaimStatus.PENDING ||
+                  claim.status === ClaimStatus.UNDER_REVIEW ||
+                  claim.status === ClaimStatus.APPROVED)
+          )
+        : undefined;
 
       return {
         id: m.id,
         similarityScore: m.similarityScore,
         matchingFactors: m.matchingFactors,
         createdAt: m.createdAt,
+        ...(isClaimant && {
+          claim: activeClaim ? { id: activeClaim.id, status: activeClaim.status } : null,
+        }),
+        ...(isFinder && {
+          claimsReceivedCount: m.claims.filter((claim) => claim.finderId === userId).length,
+        }),
         counterpartType: counterpart.type,
         counterpart: {
           id: counterpart.id,
@@ -163,23 +188,23 @@ export class MatchingService {
   static async getUserMatches(userId: string) {
     const matches = await prisma.match.findMany({
       where: {
-        OR: [
-          { lostReport: { userId } },
-          { foundReport: { userId } },
-        ],
+        OR: [{ lostReport: { userId } }, { foundReport: { userId } }],
       },
       include: {
         lostReport: {
           include: {
             category: true,
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
         },
         foundReport: {
           include: {
             category: true,
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
+        },
+        claims: {
+          select: { id: true, claimantId: true, finderId: true, status: true },
         },
       },
       orderBy: {
@@ -192,12 +217,27 @@ export class MatchingService {
       const isUserLost = m.lostReport.userId === userId;
       const myItem = isUserLost ? m.lostReport : m.foundReport;
       const matchedItem = isUserLost ? m.foundReport : m.lostReport;
+      const activeClaim = isUserLost
+        ? m.claims.find(
+            (claim) =>
+              claim.claimantId === userId &&
+                (claim.status === ClaimStatus.PENDING ||
+                  claim.status === ClaimStatus.UNDER_REVIEW ||
+                  claim.status === ClaimStatus.APPROVED)
+          )
+        : undefined;
 
       return {
         id: m.id,
         similarityScore: m.similarityScore,
         matchingFactors: m.matchingFactors,
         createdAt: m.createdAt,
+        ...(isUserLost && {
+          claim: activeClaim ? { id: activeClaim.id, status: activeClaim.status } : null,
+        }),
+        ...(!isUserLost && {
+          claimsReceivedCount: m.claims.filter((claim) => claim.finderId === userId).length,
+        }),
         myItem: {
           id: myItem.id,
           itemName: myItem.itemName,

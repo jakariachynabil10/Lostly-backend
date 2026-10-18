@@ -55,10 +55,16 @@ export class AuthController {
     }
   }
 
-  static async me(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async me(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const user = await AuthService.getProfile(req.user.id);
@@ -71,10 +77,16 @@ export class AuthController {
     }
   }
 
-  static async updateProfile(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async updateProfile(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const updated = await AuthService.updateProfile(req.user.id, req.body);

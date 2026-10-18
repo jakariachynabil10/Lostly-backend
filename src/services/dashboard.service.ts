@@ -1,5 +1,5 @@
 import { prisma } from "../prisma";
-import { ReportType, ReportStatus } from "@prisma/client";
+import { ClaimStatus, ReportType, ReportStatus } from "@prisma/client";
 
 export class DashboardService {
   static async getStats(userId: string) {
@@ -11,14 +11,30 @@ export class DashboardService {
       totalFoundCount,
       totalMatchesCount,
       totalResolvedCount,
+      pendingClaims,
+      successfulRecoveries,
     ] = await Promise.all([
       prisma.itemReport.count({ where: { userId, type: ReportType.LOST } }),
       prisma.itemReport.count({ where: { userId, type: ReportType.FOUND } }),
-      prisma.itemReport.count({ where: { userId, status: ReportStatus.RESOLVED } }),
+      prisma.itemReport.count({
+        where: { userId, status: ReportStatus.RESOLVED },
+      }),
       prisma.itemReport.count({ where: { type: ReportType.LOST } }),
       prisma.itemReport.count({ where: { type: ReportType.FOUND } }),
       prisma.match.count(),
       prisma.itemReport.count({ where: { status: ReportStatus.RESOLVED } }),
+      prisma.claim.count({
+        where: {
+          status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
+          OR: [{ claimantId: userId }, { finderId: userId }],
+        },
+      }),
+      prisma.claim.count({
+        where: {
+          status: ClaimStatus.COMPLETED,
+          OR: [{ claimantId: userId }, { finderId: userId }],
+        },
+      }),
     ]);
 
     // Count distinct matches involving the user
@@ -29,57 +45,72 @@ export class DashboardService {
     });
 
     // Calculate last 7 days distribution
-    const sevenDaysAgo = new Date();
+    const now = new Date();
+    const sevenDaysAgo = new Date(now);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     sevenDaysAgo.setHours(0, 0, 0, 0);
+    const fourteenDaysAgo = new Date(sevenDaysAgo);
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 7);
 
-    const [recentReports7d, recentMatches7d] = await Promise.all([
+    const [reports14d, matches14d] = await Promise.all([
       prisma.itemReport.findMany({
-        where: { createdAt: { gte: sevenDaysAgo } },
+        where: { createdAt: { gte: fourteenDaysAgo } },
         select: { createdAt: true },
       }),
       prisma.match.findMany({
-        where: { createdAt: { gte: sevenDaysAgo } },
+        where: { createdAt: { gte: fourteenDaysAgo } },
         select: { createdAt: true },
       }),
     ]);
 
-    const reportCountsByDay = [2, 4, 5, 8, 7, 10, 12]; // Baseline fallback if empty
-    const matchCountsByDay = [1, 2, 2, 3, 3, 4, 3]; // Baseline fallback if empty
+    const recentReports7d = reports14d.filter(
+      (report) => report.createdAt >= sevenDaysAgo,
+    );
+    const recentMatches7d = matches14d.filter(
+      (match) => match.createdAt >= sevenDaysAgo,
+    );
+    const previousReports7d = reports14d.filter(
+      (report) => report.createdAt < sevenDaysAgo,
+    );
+    const reportCountsByDay = Array(7).fill(0) as number[];
+    const matchCountsByDay = Array(7).fill(0) as number[];
     const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const dayLabels: string[] = [];
 
     for (let i = 6; i >= 0; i--) {
-      const d = new Date();
+      const d = new Date(now);
       d.setDate(d.getDate() - i);
       dayLabels.push(dayNames[d.getDay()]);
     }
 
-    if (recentReports7d.length > 0 || recentMatches7d.length > 0) {
-      // Clear baseline when real items exist
-      for (let i = 0; i < 7; i++) {
-        reportCountsByDay[i] = 0;
-        matchCountsByDay[i] = 0;
-      }
+    const dayIndex = (createdAt: Date) =>
+      6 -
+      Math.min(
+        6,
+        Math.max(
+          0,
+          Math.floor((now.getTime() - createdAt.getTime()) / 86400000),
+        ),
+      );
+    recentReports7d.forEach(
+      (report) => reportCountsByDay[dayIndex(report.createdAt)]++,
+    );
+    recentMatches7d.forEach(
+      (match) => matchCountsByDay[dayIndex(match.createdAt)]++,
+    );
+    const percentIncrease = previousReports7d.length
+      ? Math.round(
+          ((recentReports7d.length - previousReports7d.length) /
+            previousReports7d.length) *
+            100,
+        )
+      : 0;
 
-      recentReports7d.forEach((r) => {
-        const diffDays = Math.floor(
-          (new Date().getTime() - new Date(r.createdAt).getTime()) /
-            (1000 * 3600 * 24)
-        );
-        const idx = 6 - Math.min(6, Math.max(0, diffDays));
-        reportCountsByDay[idx]++;
-      });
-
-      recentMatches7d.forEach((m) => {
-        const diffDays = Math.floor(
-          (new Date().getTime() - new Date(m.createdAt).getTime()) /
-            (1000 * 3600 * 24)
-        );
-        const idx = 6 - Math.min(6, Math.max(0, diffDays));
-        matchCountsByDay[idx]++;
-      });
-    }
+    const recentNotifications = await prisma.notification.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    });
 
     return {
       userStats: {
@@ -87,6 +118,8 @@ export class DashboardService {
         totalFound: myFoundCount,
         activeMatches: myMatchesCount,
         resolvedItems: myResolvedCount,
+        pendingClaims,
+        successfulRecoveries,
       },
       systemStats: {
         totalLost: totalLostCount,
@@ -98,8 +131,9 @@ export class DashboardService {
         days: dayLabels,
         reports: reportCountsByDay,
         matches: matchCountsByDay,
-        percentIncrease: 24,
+        percentIncrease,
       },
+      recentNotifications,
     };
   }
 
@@ -135,12 +169,19 @@ export class DashboardService {
       take: 5,
     });
 
+    const recentNotifications = await prisma.notification.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+    });
+
     return {
       recentReports: recentReports.map((r) => ({
         ...r,
         matchesCount: r._count.lostMatches + r._count.foundMatches,
       })),
       recentMatches,
+      recentNotifications,
     };
   }
 }

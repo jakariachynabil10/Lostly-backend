@@ -18,6 +18,7 @@ const authLimiter = rateLimit({
   message: {
     success: false,
     message: "Too many authentication attempts, please try again in 15 minutes",
+    errors: [],
   },
   standardHeaders: true,
   legacyHeaders: false,
@@ -27,20 +28,20 @@ router.post(
   "/register",
   authLimiter,
   validateRequest(registerSchema),
-  AuthController.register
+  AuthController.register,
 );
 
 router.post(
   "/login",
   authLimiter,
   validateRequest(loginSchema),
-  AuthController.login
+  AuthController.login,
 );
 
 router.post(
   "/refresh",
   validateRequest(refreshTokenSchema),
-  AuthController.refresh
+  AuthController.refresh,
 );
 
 router.post("/logout", AuthController.logout);
@@ -51,7 +52,7 @@ router.put(
   "/profile",
   authMiddleware,
   validateRequest(updateProfileSchema),
-  AuthController.updateProfile
+  AuthController.updateProfile,
 );
 
 export default router;

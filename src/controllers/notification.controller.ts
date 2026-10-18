@@ -6,7 +6,7 @@ export class NotificationController {
   static async getNotifications(
     req: AuthenticatedRequest,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<void> {
     try {
       const userId = req.user!.id;
@@ -29,7 +29,7 @@ export class NotificationController {
   static async getUnreadCount(
     req: AuthenticatedRequest,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<void> {
     try {
       const userId = req.user!.id;
@@ -47,7 +47,7 @@ export class NotificationController {
   static async markAsRead(
     req: AuthenticatedRequest,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<void> {
     try {
       const userId = req.user!.id;
@@ -59,6 +59,7 @@ export class NotificationController {
         res.status(404).json({
           success: false,
           message: "Notification not found",
+          errors: [],
         });
         return;
       }
@@ -76,7 +77,7 @@ export class NotificationController {
   static async markAllAsRead(
     req: AuthenticatedRequest,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
   ): Promise<void> {
     try {
       const userId = req.user!.id;

@@ -1,7 +1,13 @@
 import { prisma } from "../prisma";
-import { ClaimStatus, ReportStatus, NotificationType, Prisma } from "@prisma/client";
+import {
+  ClaimStatus,
+  ReportStatus,
+  NotificationType,
+  Prisma,
+} from "@prisma/client";
 import { AppError } from "../middleware/error.middleware";
 import { NotificationService } from "./notification.service";
+import { ENV } from "../config/env";
 
 export interface CreateClaimInput {
   matchId: string;
@@ -22,18 +28,38 @@ export interface ClaimQueryOptions {
 }
 
 export class ClaimService {
+  private static async notifySafely(
+    params: Parameters<typeof NotificationService.createNotification>[0],
+  ) {
+    try {
+      await NotificationService.createNotification(params);
+    } catch (error) {
+      console.warn("[ClaimService] Notification dispatch failed:", error);
+    }
+  }
+
+  private static frontendLink(path: string) {
+    return new URL(path, ENV.FRONTEND_URL).toString();
+  }
+
   /**
-   * Helper to check if a report has any remaining active claims (PENDING or UNDER_REVIEW)
+  * Helper to check if a report has any remaining active claims.
    */
   private static async hasOtherActiveClaims(
     tx: Prisma.TransactionClient,
     reportId: string,
-    excludeClaimId?: string
+    excludeClaimId?: string,
   ): Promise<boolean> {
     const activeCount = await tx.claim.count({
       where: {
         id: excludeClaimId ? { not: excludeClaimId } : undefined,
-        status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
+        status: {
+          in: [
+            ClaimStatus.PENDING,
+            ClaimStatus.UNDER_REVIEW,
+            ClaimStatus.APPROVED,
+          ],
+        },
         match: {
           OR: [{ lostReportId: reportId }, { foundReportId: reportId }],
         },
@@ -48,9 +74,13 @@ export class ClaimService {
   private static async revertReportStatusIfNeeded(
     tx: Prisma.TransactionClient,
     reportId: string,
-    excludeClaimId: string
+    excludeClaimId: string,
   ) {
-    const hasActive = await this.hasOtherActiveClaims(tx, reportId, excludeClaimId);
+    const hasActive = await this.hasOtherActiveClaims(
+      tx,
+      reportId,
+      excludeClaimId,
+    );
     if (!hasActive) {
       await tx.itemReport.update({
         where: { id: reportId },
@@ -69,12 +99,12 @@ export class ClaimService {
       include: {
         lostReport: {
           include: {
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
         },
         foundReport: {
           include: {
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true } },
           },
         },
       },
@@ -89,14 +119,18 @@ export class ClaimService {
     // 2. Ownership & Role Validation
     // Claimant must be the owner of the LOST report
     if (match.lostReport.userId !== claimantId) {
-      const err: AppError = new Error("Only the owner of the lost report can initiate an ownership claim");
+      const err: AppError = new Error(
+        "Only the owner of the lost report can initiate an ownership claim",
+      );
       err.statusCode = 403;
       throw err;
     }
 
     // Users cannot claim against their own reports
     if (match.foundReport.userId === claimantId) {
-      const err: AppError = new Error("You cannot submit an ownership claim against your own report");
+      const err: AppError = new Error(
+        "You cannot submit an ownership claim against your own report",
+      );
       err.statusCode = 400;
       throw err;
     }
@@ -108,48 +142,48 @@ export class ClaimService {
       match.foundReport.status === ReportStatus.RESOLVED ||
       match.foundReport.status === ReportStatus.CLOSED
     ) {
-      const err: AppError = new Error("Cannot claim an item that is already resolved or closed");
-      err.statusCode = 400;
-      throw err;
-    }
-
-    // 3. Limit each claimant to 5 active claims at once (PENDING or UNDER_REVIEW)
-    const activeClaimsCount = await prisma.claim.count({
-      where: {
-        claimantId,
-        status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
-      },
-    });
-
-    if (activeClaimsCount >= 5) {
       const err: AppError = new Error(
-        "Active claim limit reached (maximum 5 concurrent active claims allowed). Please await resolution of existing claims."
+        "Cannot claim an item that is already resolved or closed",
       );
       err.statusCode = 400;
       throw err;
     }
 
-    // 4. Enforce only one active claim per (match, claimant)
-    const existingActiveClaim = await prisma.claim.findFirst({
-      where: {
-        matchId: match.id,
-        claimantId,
-        status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
-      },
-    });
-
-    if (existingActiveClaim) {
-      const err: AppError = new Error(
-        "You already have an active claim under review for this match."
-      );
-      err.statusCode = 400;
-      throw err;
-    }
-
-    // 5. Execute creation within a Prisma $transaction
+    // Execute race-sensitive checks and creation together.
     const finderId = match.foundReport.userId;
 
     const result = await prisma.$transaction(async (tx) => {
+      const activeClaimsCount = await tx.claim.count({
+        where: {
+          claimantId,
+          status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
+        },
+      });
+
+      if (activeClaimsCount >= 5) {
+        const err: AppError = new Error(
+          "Active claim limit reached (maximum 5 concurrent active claims allowed). Please await resolution of existing claims.",
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const existingActiveClaim = await tx.claim.findFirst({
+        where: {
+          matchId: match.id,
+          claimantId,
+          status: { in: [ClaimStatus.PENDING, ClaimStatus.UNDER_REVIEW] },
+        },
+      });
+
+      if (existingActiveClaim) {
+        const err: AppError = new Error(
+          "You already have an active claim for this match.",
+        );
+        err.statusCode = 409;
+        throw err;
+      }
+
       // Create Claim
       const claim = await tx.claim.create({
         data: {
@@ -175,12 +209,12 @@ export class ClaimService {
     });
 
     // 6. Notify Finder (CLAIM_RECEIVED)
-    await NotificationService.createNotification({
+    await this.notifySafely({
       userId: finderId,
       type: NotificationType.CLAIM_RECEIVED,
       title: "New Ownership Claim Received",
       message: `${match.lostReport.user.name} submitted an ownership claim for the found item "${match.foundReport.itemName}". Please set up verification questions.`,
-      link: `/claims/${result.id}`,
+      link: this.frontendLink(`/claims/${result.id}`),
     });
 
     return result;
@@ -314,14 +348,17 @@ export class ClaimService {
     const isFinder = claim.finderId === userId;
 
     if (!isClaimant && !isFinder) {
-      const err: AppError = new Error("Unauthorized to access this verification room");
+      const err: AppError = new Error(
+        "Unauthorized to access this verification room",
+      );
       err.statusCode = 403;
       throw err;
     }
 
     // Enforce privacy rule: Contact details hidden until claim is APPROVED or COMPLETED
     const canSeeContactDetails =
-      claim.status === ClaimStatus.APPROVED || claim.status === ClaimStatus.COMPLETED;
+      claim.status === ClaimStatus.APPROVED ||
+      claim.status === ClaimStatus.COMPLETED;
 
     return {
       ...claim,
@@ -347,7 +384,7 @@ export class ClaimService {
   static async handleClaimAction(
     claimId: string,
     userId: string,
-    input: ClaimActionInput
+    input: ClaimActionInput,
   ) {
     const claim = await prisma.claim.findUnique({
       where: { id: claimId },
@@ -382,7 +419,9 @@ export class ClaimService {
       case "approve": {
         // Only finder can approve
         if (!isFinder) {
-          const err: AppError = new Error("Only the finder can approve an ownership claim");
+          const err: AppError = new Error(
+            "Only the finder can approve an ownership claim",
+          );
           err.statusCode = 403;
           throw err;
         }
@@ -390,33 +429,30 @@ export class ClaimService {
         // Only from UNDER_REVIEW
         if (claim.status !== ClaimStatus.UNDER_REVIEW) {
           const err: AppError = new Error(
-            `Cannot approve claim from status ${claim.status}. Claim must be UNDER_REVIEW.`
+            `Cannot approve claim from status ${claim.status}. Claim must be UNDER_REVIEW.`,
           );
           err.statusCode = 400;
           throw err;
         }
 
         // Rule 8: Only one APPROVED claim per found report at a time
-        const existingApproved = await prisma.claim.findFirst({
-          where: {
-            id: { not: claim.id },
-            status: ClaimStatus.APPROVED,
-            match: {
-              foundReportId: claim.match.foundReportId,
-            },
-          },
-        });
-
-        if (existingApproved) {
-          const err: AppError = new Error(
-            "Another claim on this found item is already approved. Cannot approve multiple claims simultaneously."
-          );
-          err.statusCode = 400;
-          throw err;
-        }
-
-        // Update claim to APPROVED in transaction
         const updatedClaim = await prisma.$transaction(async (tx) => {
+          const existingApproved = await tx.claim.findFirst({
+            where: {
+              id: { not: claim.id },
+              status: ClaimStatus.APPROVED,
+              match: { foundReportId: claim.match.foundReportId },
+            },
+          });
+
+          if (existingApproved) {
+            const err: AppError = new Error(
+              "Another claim on this found item is already approved. Cannot approve multiple claims simultaneously.",
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
           return tx.claim.update({
             where: { id: claim.id },
             data: {
@@ -428,12 +464,12 @@ export class ClaimService {
         });
 
         // Notify Claimant (CLAIM_APPROVED)
-        await NotificationService.createNotification({
+        await this.notifySafely({
           userId: claim.claimantId,
           type: NotificationType.CLAIM_APPROVED,
           title: "Ownership Claim Approved!",
           message: `Your ownership claim for "${claim.match.foundReport.itemName}" was approved! Contact details are now unlocked.`,
-          link: `/claims/${claim.id}`,
+          link: this.frontendLink(`/claims/${claim.id}`),
         });
 
         return updatedClaim;
@@ -442,7 +478,9 @@ export class ClaimService {
       case "reject": {
         // Only finder can reject
         if (!isFinder) {
-          const err: AppError = new Error("Only the finder can reject this claim");
+          const err: AppError = new Error(
+            "Only the finder can reject this claim",
+          );
           err.statusCode = 403;
           throw err;
         }
@@ -453,7 +491,7 @@ export class ClaimService {
           claim.status !== ClaimStatus.UNDER_REVIEW
         ) {
           const err: AppError = new Error(
-            `Cannot reject claim from status ${claim.status}. Claim must be PENDING or UNDER_REVIEW.`
+            `Cannot reject claim from status ${claim.status}. Claim must be PENDING or UNDER_REVIEW.`,
           );
           err.statusCode = 400;
           throw err;
@@ -462,7 +500,7 @@ export class ClaimService {
         // Reason (reviewNotes) is required
         if (!reviewNotes || !reviewNotes.trim()) {
           const err: AppError = new Error(
-            "A clear rejection reason (reviewNotes) is required when rejecting a claim."
+            "A clear rejection reason (reviewNotes) is required when rejecting a claim.",
           );
           err.statusCode = 400;
           throw err;
@@ -480,19 +518,27 @@ export class ClaimService {
           });
 
           // Rule 7: Revert reports if no other active claim
-          await this.revertReportStatusIfNeeded(tx, claim.match.lostReportId, claim.id);
-          await this.revertReportStatusIfNeeded(tx, claim.match.foundReportId, claim.id);
+          await this.revertReportStatusIfNeeded(
+            tx,
+            claim.match.lostReportId,
+            claim.id,
+          );
+          await this.revertReportStatusIfNeeded(
+            tx,
+            claim.match.foundReportId,
+            claim.id,
+          );
 
           return updated;
         });
 
         // Notify Claimant (CLAIM_REJECTED)
-        await NotificationService.createNotification({
+        await this.notifySafely({
           userId: claim.claimantId,
           type: NotificationType.CLAIM_REJECTED,
           title: "Ownership Claim Rejected",
           message: `Your claim for "${claim.match.foundReport.itemName}" was rejected. Reason: "${reviewNotes.trim()}".`,
-          link: `/claims/${claim.id}`,
+          link: this.frontendLink(`/claims/${claim.id}`),
         });
 
         return updatedClaim;
@@ -501,7 +547,9 @@ export class ClaimService {
       case "cancel": {
         // Only claimant can cancel
         if (!isClaimant) {
-          const err: AppError = new Error("Only the claimant can cancel this claim");
+          const err: AppError = new Error(
+            "Only the claimant can cancel this claim",
+          );
           err.statusCode = 403;
           throw err;
         }
@@ -512,7 +560,7 @@ export class ClaimService {
           claim.status !== ClaimStatus.UNDER_REVIEW
         ) {
           const err: AppError = new Error(
-            `Cannot cancel claim from status ${claim.status}. Claim must be PENDING or UNDER_REVIEW.`
+            `Cannot cancel claim from status ${claim.status}. Claim must be PENDING or UNDER_REVIEW.`,
           );
           err.statusCode = 400;
           throw err;
@@ -528,19 +576,27 @@ export class ClaimService {
           });
 
           // Rule 7: Revert reports if no other active claim
-          await this.revertReportStatusIfNeeded(tx, claim.match.lostReportId, claim.id);
-          await this.revertReportStatusIfNeeded(tx, claim.match.foundReportId, claim.id);
+          await this.revertReportStatusIfNeeded(
+            tx,
+            claim.match.lostReportId,
+            claim.id,
+          );
+          await this.revertReportStatusIfNeeded(
+            tx,
+            claim.match.foundReportId,
+            claim.id,
+          );
 
           return updated;
         });
 
         // Notify Finder (CLAIM_CANCELLED)
-        await NotificationService.createNotification({
+        await this.notifySafely({
           userId: claim.finderId,
           type: NotificationType.CLAIM_CANCELLED,
           title: "Claim Cancelled",
           message: `The ownership claim for "${claim.match.foundReport.itemName}" was cancelled by the claimant.`,
-          link: `/claims/${claim.id}`,
+          link: this.frontendLink(`/claims/${claim.id}`),
         });
 
         return updatedClaim;
@@ -549,7 +605,9 @@ export class ClaimService {
       case "complete": {
         // Only finder can complete
         if (!isFinder) {
-          const err: AppError = new Error("Only the finder can mark an item as returned");
+          const err: AppError = new Error(
+            "Only the finder can mark an item as returned",
+          );
           err.statusCode = 403;
           throw err;
         }
@@ -557,15 +615,15 @@ export class ClaimService {
         // Must be in APPROVED status
         if (claim.status !== ClaimStatus.APPROVED) {
           const err: AppError = new Error(
-            `Cannot complete claim from status ${claim.status}. Claim must be APPROVED first.`
+            `Cannot complete claim from status ${claim.status}. Claim must be APPROVED first.`,
           );
           err.statusCode = 400;
           throw err;
         }
 
         // Transaction: Mark claim COMPLETED, both reports RESOLVED, cancel conflicting claims
-        const { completedClaim, otherCancelledClaims } = await prisma.$transaction(
-          async (tx) => {
+        const { completedClaim, otherCancelledClaims } =
+          await prisma.$transaction(async (tx) => {
             // 1. Mark this claim COMPLETED
             const completed = await tx.claim.update({
               where: { id: claim.id },
@@ -604,7 +662,11 @@ export class ClaimService {
                   ],
                 },
               },
-              select: { id: true, claimantId: true },
+              select: {
+                id: true,
+                claimantId: true,
+                match: { select: { lostReportId: true, foundReportId: true } },
+              },
             });
 
             if (otherClaims.length > 0) {
@@ -614,36 +676,47 @@ export class ClaimService {
                 },
                 data: {
                   status: ClaimStatus.CANCELLED,
-                  reviewNotes: "Auto-cancelled: item has been returned and resolved in another claim.",
+                  reviewNotes:
+                    "Auto-cancelled: item has been returned and resolved in another claim.",
                 },
               });
+            }
+
+            const affectedReportIds = new Set<string>();
+            for (const other of otherClaims) {
+              affectedReportIds.add(other.match.lostReportId);
+              affectedReportIds.add(other.match.foundReportId);
+            }
+            affectedReportIds.delete(claim.match.lostReportId);
+            affectedReportIds.delete(claim.match.foundReportId);
+            for (const reportId of affectedReportIds) {
+              await this.revertReportStatusIfNeeded(tx, reportId, claim.id);
             }
 
             return {
               completedClaim: completed,
               otherCancelledClaims: otherClaims,
             };
-          }
-        );
+          });
 
         // Notify Claimant (CLAIM_COMPLETED)
-        await NotificationService.createNotification({
+        await this.notifySafely({
           userId: claim.claimantId,
           type: NotificationType.CLAIM_COMPLETED,
           title: "Item Returned & Recovery Complete!",
           message: `The finder marked "${claim.match.foundReport.itemName}" as returned. Your recovery is complete!`,
-          link: `/claims/${claim.id}`,
+          link: this.frontendLink(`/claims/${claim.id}`),
         });
 
         // Notify other claimants whose claims were auto-cancelled
         for (const other of otherCancelledClaims) {
           if (other.claimantId !== claim.claimantId) {
-            await NotificationService.createNotification({
+            await this.notifySafely({
               userId: other.claimantId,
               type: NotificationType.CLAIM_CANCELLED,
               title: "Claim Closed",
               message: `The item "${claim.match.foundReport.itemName}" was confirmed returned to another owner and has been resolved.`,
-              link: `/claims/${other.id}`,
+              link: this.frontendLink(`/claims/${other.id}`),
             });
           }
         }

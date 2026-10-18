@@ -5,10 +5,16 @@ import { processUploadedFile } from "../middleware/upload.middleware";
 import { ReportType, ReportStatus } from "@prisma/client";
 
 export class ReportController {
-  static async create(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async create(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
 
@@ -27,7 +33,13 @@ export class ReportController {
   static async uploadImage(req: Request, res: Response, next: NextFunction) {
     try {
       if (!req.file) {
-        res.status(400).json({ success: false, message: "No image file uploaded" });
+        res
+          .status(400)
+          .json({
+            success: false,
+            message: "No image file uploaded",
+            errors: [],
+          });
         return;
       }
 
@@ -95,14 +107,24 @@ export class ReportController {
     }
   }
 
-  static async update(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async update(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const { id } = req.params;
-      const updated = await ReportService.updateReport(id, req.user.id, req.body);
+      const updated = await ReportService.updateReport(
+        id,
+        req.user.id,
+        req.body,
+      );
       res.json({
         success: true,
         message: "Report updated successfully",
@@ -113,10 +135,16 @@ export class ReportController {
     }
   }
 
-  static async delete(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async delete(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const { id } = req.params;
@@ -130,17 +158,23 @@ export class ReportController {
     }
   }
 
-  static async getMyReports(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  static async getMyReports(
+    req: AuthenticatedRequest,
+    res: Response,
+    next: NextFunction,
+  ) {
     try {
       if (!req.user) {
-        res.status(401).json({ success: false, message: "Unauthorized" });
+        res
+          .status(401)
+          .json({ success: false, message: "Unauthorized", errors: [] });
         return;
       }
       const { type, status } = req.query;
       const reports = await ReportService.getUserReports(
         req.user.id,
         type ? (type as ReportType) : undefined,
-        status ? (status as ReportStatus) : undefined
+        status ? (status as ReportStatus) : undefined,
       );
       res.json({
         success: true,

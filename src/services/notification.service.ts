@@ -1,6 +1,7 @@
 import { prisma } from "../prisma";
 import { NotificationType } from "@prisma/client";
 import { sendEmailSafely } from "../utils/email";
+import { ENV } from "../config/env";
 
 export interface CreateNotificationParams {
   userId: string;
@@ -32,7 +33,7 @@ export class NotificationService {
     });
 
     // Email check for specified types
-    const eligibleEmailTypes = [
+    const eligibleEmailTypes: any = [
       NotificationType.MATCH_FOUND,
       NotificationType.CLAIM_RECEIVED,
       NotificationType.CLAIM_APPROVED,
@@ -47,14 +48,20 @@ export class NotificationService {
         });
 
         if (user?.email) {
+          const emailLink = link
+            ? new URL(link, ENV.FRONTEND_URL).toString()
+            : undefined;
           await sendEmailSafely({
             to: user.email,
             subject: `[Lostly] ${title}`,
-            text: `Hi ${user.name},\n\n${message}\n\n${link ? `View details here: ${link}\n\n` : ""}Lostly Matching & Recovery System`,
+            text: `Hi ${user.name},\n\n${message}\n\n${emailLink ? `View details here: ${emailLink}\n\n` : ""}Lostly Matching & Recovery System`,
           });
         }
       } catch (err: any) {
-        console.warn("[NotificationService] Safe email dispatch caught:", err.message);
+        console.warn(
+          "[NotificationService] Safe email dispatch caught:",
+          err.message,
+        );
       }
     }
 
@@ -63,7 +70,7 @@ export class NotificationService {
 
   static async getUserNotifications(
     userId: string,
-    options: { page?: number; limit?: number } = {}
+    options: { page?: number; limit?: number } = {},
   ) {
     const page = Math.max(1, Number(options.page) || 1);
     const limit = Math.max(1, Math.min(100, Number(options.limit) || 15));
