@@ -4,10 +4,10 @@ import {
   ReportStatus,
   NotificationType,
   Prisma,
+  VerificationReviewStatus,
 } from "@prisma/client";
 import { AppError } from "../middleware/error.middleware";
 import { NotificationService } from "./notification.service";
-import { ENV } from "../config/env";
 
 export interface CreateClaimInput {
   matchId: string;
@@ -36,10 +36,6 @@ export class ClaimService {
     } catch (error) {
       console.warn("[ClaimService] Notification dispatch failed:", error);
     }
-  }
-
-  private static frontendLink(path: string) {
-    return new URL(path, ENV.FRONTEND_URL).toString();
   }
 
   private static async runSerializableTransaction<T>(
@@ -248,7 +244,7 @@ export class ClaimService {
       type: NotificationType.CLAIM_RECEIVED,
       title: "New Ownership Claim Received",
       message: `${match.lostReport.user.name} submitted an ownership claim for the found item "${match.foundReport.itemName}". Please set up verification questions.`,
-      link: this.frontendLink(`/claims/${result.id}`),
+      link: `/claims/${result.id}`,
     });
 
     return result;
@@ -471,6 +467,32 @@ export class ClaimService {
 
         // Rule 8: Only one APPROVED claim per found report at a time
         const updatedClaim = await this.runSerializableTransaction(async (tx) => {
+          const questions = await tx.verificationQuestion.findMany({
+            where: { claimId: claim.id },
+            select: { answers: { select: { reviewStatus: true } } },
+          });
+          if (questions.length === 0) {
+            const err: AppError = new Error(
+              "Add at least one verification question before approving this claim.",
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+          if (
+            questions.some(
+              (question) =>
+                question.answers.length !== 1 ||
+                question.answers[0].reviewStatus !==
+                  VerificationReviewStatus.ACCEPTED,
+            )
+          ) {
+            const err: AppError = new Error(
+              "Every verification question must have an accepted answer before approval.",
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+
           const existingApproved = await tx.claim.findFirst({
             where: {
               id: { not: claim.id },
@@ -505,7 +527,7 @@ export class ClaimService {
           type: NotificationType.CLAIM_APPROVED,
           title: "Ownership Claim Approved!",
           message: `Your ownership claim for "${claim.match.foundReport.itemName}" was approved! Contact details are now unlocked.`,
-          link: this.frontendLink(`/claims/${claim.id}`),
+          link: `/claims/${claim.id}`,
         });
 
         return updatedClaim;
@@ -576,7 +598,7 @@ export class ClaimService {
           type: NotificationType.CLAIM_REJECTED,
           title: "Ownership Claim Rejected",
           message: `Your claim for "${claim.match.foundReport.itemName}" was rejected. Reason: "${reviewNotes.trim()}".`,
-          link: this.frontendLink(`/claims/${claim.id}`),
+          link: `/claims/${claim.id}`,
         });
 
         return updatedClaim;
@@ -636,7 +658,7 @@ export class ClaimService {
           type: NotificationType.CLAIM_CANCELLED,
           title: "Claim Cancelled",
           message: `The ownership claim for "${claim.match.foundReport.itemName}" was cancelled by the claimant.`,
-          link: this.frontendLink(`/claims/${claim.id}`),
+          link: `/claims/${claim.id}`,
         });
 
         return updatedClaim;
@@ -761,7 +783,7 @@ export class ClaimService {
           type: NotificationType.CLAIM_COMPLETED,
           title: "Item Returned & Recovery Complete!",
           message: `The finder marked "${claim.match.foundReport.itemName}" as returned. Your recovery is complete!`,
-          link: this.frontendLink(`/claims/${claim.id}`),
+          link: `/claims/${claim.id}`,
         });
 
         // Notify other claimants whose claims were auto-cancelled
@@ -772,7 +794,7 @@ export class ClaimService {
               type: NotificationType.CLAIM_CANCELLED,
               title: "Claim Closed",
               message: `The item "${claim.match.foundReport.itemName}" was confirmed returned to another owner and has been resolved.`,
-              link: this.frontendLink(`/claims/${other.id}`),
+              link: `/claims/${other.id}`,
             });
           }
         }

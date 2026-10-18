@@ -6,7 +6,6 @@ import {
 import { prisma } from "../prisma";
 import { AppError } from "../middleware/error.middleware";
 import { NotificationService } from "./notification.service";
-import { ENV } from "../config/env";
 
 const MAX_QUESTION_LENGTH = 500;
 const MAX_ANSWER_LENGTH = 2000;
@@ -33,10 +32,6 @@ async function notifySafely(
   } catch (error) {
     console.warn("[VerificationService] Notification dispatch failed:", error);
   }
-}
-
-function frontendLink(path: string): string {
-  return new URL(path, ENV.FRONTEND_URL).toString();
 }
 
 export interface SubmitVerificationAnswer {
@@ -84,6 +79,16 @@ export class VerificationService {
         );
       }
 
+      const existingQuestionCount = await tx.verificationQuestion.count({
+        where: { claimId },
+      });
+      if (existingQuestionCount + normalizedQuestions.length > 15) {
+        throw createError(
+          "A claim cannot have more than 15 verification questions",
+          400,
+        );
+      }
+
       const createdQuestions = await Promise.all(
         normalizedQuestions.map((question) =>
           tx.verificationQuestion.create({ data: { claimId, question } }),
@@ -112,7 +117,7 @@ export class VerificationService {
       message: result.wasUnderReview
         ? "The finder has requested additional verification information for your claim."
         : "The finder added verification questions to your claim.",
-      link: frontendLink(`/claims/${claimId}`),
+      link: `/claims/${claimId}`,
     });
 
     return result.createdQuestions;
@@ -146,7 +151,13 @@ export class VerificationService {
         where: {
           id: { in: normalizedAnswers.map(({ questionId }) => questionId) },
         },
-        include: { claim: true, answers: { select: { id: true } } },
+        include: {
+          claim: true,
+          answers: {
+            select: { id: true, reviewStatus: true },
+            orderBy: { createdAt: "desc" },
+          },
+        },
       });
       if (questions.length !== normalizedAnswers.length) {
         throw createError(
@@ -176,41 +187,70 @@ export class VerificationService {
           400,
         );
       }
-      if (questions.some((question) => question.answers.length > 0)) {
+      const questionsById = new Map(
+        questions.map((question) => [question.id, question]),
+      );
+      if (
+        normalizedAnswers.some(({ questionId }) => {
+          const latestAnswer = questionsById.get(questionId)?.answers[0];
+          return (
+            latestAnswer !== undefined &&
+            latestAnswer.reviewStatus !== VerificationReviewStatus.REJECTED
+          );
+        })
+      ) {
         throw createError(
-          "Only unanswered verification questions can be answered",
+          "Only unanswered or rejected verification questions can be answered",
           400,
         );
       }
 
       const createdAnswers = await Promise.all(
-        normalizedAnswers.map(({ questionId, answer }) =>
-          tx.verificationAnswer.create({
-            data: { questionId, claimantId, answer },
-          }),
-        ),
+        normalizedAnswers.map(({ questionId, answer }) => {
+          const previousAnswer = questionsById.get(questionId)?.answers[0];
+          return previousAnswer
+            ? tx.verificationAnswer.update({
+                where: { id: previousAnswer.id },
+                data: {
+                  answer,
+                  reviewStatus: VerificationReviewStatus.PENDING,
+                },
+              })
+            : tx.verificationAnswer.create({
+                data: { questionId, claimantId, answer },
+              });
+        }),
       );
 
       const allQuestions = await tx.verificationQuestion.findMany({
         where: { claimId },
-        include: { answers: { select: { id: true } } },
+        include: {
+          answers: {
+            select: { reviewStatus: true },
+            orderBy: { createdAt: "desc" },
+          },
+        },
       });
-      const submittedQuestionIds = new Set(
-        normalizedAnswers.map(({ questionId }) => questionId),
-      );
-      const allAnswered = allQuestions.every(
+      const hasOpenQuestions = allQuestions.some(
         (question) =>
-          question.answers.length > 0 || submittedQuestionIds.has(question.id),
+          question.answers.length === 0 ||
+          question.answers[0].reviewStatus ===
+            VerificationReviewStatus.REJECTED,
       );
 
-      if (allAnswered) {
+      if (!hasOpenQuestions) {
         await tx.claim.update({
           where: { id: claimId },
           data: { status: ClaimStatus.UNDER_REVIEW },
         });
       }
 
-      return { claimId, finderId: claim.finderId, allAnswered, createdAnswers };
+      return {
+        claimId,
+        finderId: claim.finderId,
+        allAnswered: !hasOpenQuestions,
+        createdAnswers,
+      };
     });
 
     if (result.allAnswered) {
@@ -220,7 +260,7 @@ export class VerificationService {
         title: "Verification Answers Submitted",
         message:
           "The claimant has answered all verification questions. The claim is ready for review.",
-        link: frontendLink(`/claims/${result.claimId}`),
+        link: `/claims/${result.claimId}`,
       });
     }
 
@@ -240,8 +280,11 @@ export class VerificationService {
     if (answer.question.claim.finderId !== finderId) {
       throw createError("Only the finder can review this answer", 403);
     }
-    if (answer.reviewStatus !== VerificationReviewStatus.PENDING) {
-      throw createError("This answer has already been reviewed", 400);
+    if (answer.question.claim.status !== ClaimStatus.UNDER_REVIEW) {
+      throw createError(
+        "Answers can only be reviewed while the claim is UNDER_REVIEW",
+        400,
+      );
     }
 
     return prisma.verificationAnswer.update({

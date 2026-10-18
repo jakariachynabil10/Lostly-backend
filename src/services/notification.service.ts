@@ -33,7 +33,7 @@ export class NotificationService {
     });
 
     // Email check for specified types
-    const eligibleEmailTypes: any = [
+    const eligibleEmailTypes: NotificationType[] = [
       NotificationType.MATCH_FOUND,
       NotificationType.CLAIM_RECEIVED,
       NotificationType.CLAIM_APPROVED,

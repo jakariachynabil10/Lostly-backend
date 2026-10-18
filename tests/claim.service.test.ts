@@ -4,6 +4,7 @@ import {
   NotificationType,
   Prisma,
   ReportStatus,
+  VerificationReviewStatus,
 } from "@prisma/client";
 
 const { tx, prismaMock, notificationMock } = vi.hoisted(() => {
@@ -17,6 +18,7 @@ const { tx, prismaMock, notificationMock } = vi.hoisted(() => {
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    verificationQuestion: { findMany: vi.fn() },
     itemReport: { update: vi.fn() },
   };
 
@@ -57,6 +59,25 @@ function claimFixture(status: ClaimStatus) {
   };
 }
 
+function matchFixture(lostOwnerId = "claimant-1", foundOwnerId = "finder-1") {
+  return {
+    id: "match-1",
+    lostReportId: "lost-1",
+    foundReportId: "found-1",
+    lostReport: {
+      userId: lostOwnerId,
+      status: ReportStatus.MATCH_FOUND,
+      user: { name: "A" },
+    },
+    foundReport: {
+      userId: foundOwnerId,
+      status: ReportStatus.MATCH_FOUND,
+      itemName: "Wallet",
+      user: { name: "B" },
+    },
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   tx.claim.count.mockResolvedValue(0);
@@ -70,6 +91,9 @@ beforeEach(() => {
   tx.claim.findUniqueOrThrow.mockResolvedValue(
     claimFixture(ClaimStatus.UNDER_REVIEW),
   );
+  tx.verificationQuestion.findMany.mockResolvedValue([
+    { answers: [{ reviewStatus: VerificationReviewStatus.ACCEPTED }] },
+  ]);
   tx.claim.updateMany.mockResolvedValue({ count: 1 });
   tx.itemReport.update.mockResolvedValue({});
   notificationMock.createNotification.mockResolvedValue({
@@ -127,6 +151,62 @@ describe("ClaimService.handleClaimAction", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects approval from PENDING", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.PENDING),
+    );
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "approve",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects approval when an answer is not accepted", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.UNDER_REVIEW),
+    );
+    tx.verificationQuestion.findMany.mockResolvedValue([
+      { answers: [{ reviewStatus: VerificationReviewStatus.REJECTED }] },
+    ]);
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "approve",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(tx.claim.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects approval when no verification questions exist", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.UNDER_REVIEW),
+    );
+    tx.verificationQuestion.findMany.mockResolvedValue([]);
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "approve",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("blocks a second approved claim for the found report", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.UNDER_REVIEW),
+    );
+    tx.claim.findFirst.mockResolvedValue({ id: "existing-approved-claim" });
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "approve",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(tx.claim.updateMany).not.toHaveBeenCalled();
   });
 
   it("rejects a cancellation attempt by the finder", async () => {
@@ -207,6 +287,32 @@ describe("ClaimService.handleClaimAction", () => {
     });
   });
 
+  it("rejects without a review reason", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.PENDING),
+    );
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "reject",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects completion from UNDER_REVIEW", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.UNDER_REVIEW),
+    );
+
+    await expect(
+      ClaimService.handleClaimAction("claim-1", "finder-1", {
+        action: "complete",
+      }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
   it("restores unrelated reports after cancelling competing claims on completion", async () => {
     prismaMock.claim.findUnique.mockResolvedValue(
       claimFixture(ClaimStatus.APPROVED),
@@ -258,9 +364,70 @@ describe("ClaimService.handleClaimAction", () => {
       data: { status: ReportStatus.MATCH_FOUND },
     });
   });
+
+  it("reverts both reports after rejection when no active claims remain", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.PENDING),
+    );
+
+    await ClaimService.handleClaimAction("claim-1", "finder-1", {
+      action: "reject",
+      reviewNotes: "Insufficient ownership details",
+    });
+
+    expect(tx.itemReport.update).toHaveBeenCalledWith({
+      where: { id: "lost-1" },
+      data: { status: ReportStatus.MATCH_FOUND },
+    });
+    expect(tx.itemReport.update).toHaveBeenCalledWith({
+      where: { id: "found-1" },
+      data: { status: ReportStatus.MATCH_FOUND },
+    });
+  });
+
+  it("reverts both reports after cancellation when no active claims remain", async () => {
+    prismaMock.claim.findUnique.mockResolvedValue(
+      claimFixture(ClaimStatus.PENDING),
+    );
+
+    await ClaimService.handleClaimAction("claim-1", "claimant-1", {
+      action: "cancel",
+    });
+
+    expect(tx.itemReport.update).toHaveBeenCalledWith({
+      where: { id: "lost-1" },
+      data: { status: ReportStatus.MATCH_FOUND },
+    });
+    expect(tx.itemReport.update).toHaveBeenCalledWith({
+      where: { id: "found-1" },
+      data: { status: ReportStatus.MATCH_FOUND },
+    });
+  });
 });
 
 describe("ClaimService.createClaim", () => {
+  it("rejects a claimant who does not own the lost report", async () => {
+    prismaMock.match.findUnique.mockResolvedValue(
+      matchFixture("different-user", "finder-1"),
+    );
+
+    await expect(
+      ClaimService.createClaim("claimant-1", { matchId: "match-1" }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a claimant's own found report", async () => {
+    prismaMock.match.findUnique.mockResolvedValue(
+      matchFixture("claimant-1", "claimant-1"),
+    );
+
+    await expect(
+      ClaimService.createClaim("claimant-1", { matchId: "match-1" }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(prismaMock.$transaction).not.toHaveBeenCalled();
+  });
+
   it("enforces the five-active-claim limit inside Serializable isolation", async () => {
     prismaMock.match.findUnique.mockResolvedValue({
       id: "match-1",
