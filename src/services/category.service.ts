@@ -1,5 +1,7 @@
 import { prisma } from "../prisma";
 
+// Category Service
+
 export class CategoryService {
   static async getAll() {
     return prisma.category.findMany({
