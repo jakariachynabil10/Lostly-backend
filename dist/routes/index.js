@@ -1,0 +1,24 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const auth_routes_1 = __importDefault(require("./auth.routes"));
+const category_routes_1 = __importDefault(require("./category.routes"));
+const report_routes_1 = __importDefault(require("./report.routes"));
+const match_routes_1 = __importDefault(require("./match.routes"));
+const dashboard_routes_1 = __importDefault(require("./dashboard.routes"));
+const notification_routes_1 = __importDefault(require("./notification.routes"));
+const claim_routes_1 = __importDefault(require("./claim.routes"));
+const verification_routes_1 = __importDefault(require("./verification.routes"));
+const router = (0, express_1.Router)();
+router.use("/auth", auth_routes_1.default);
+router.use("/categories", category_routes_1.default);
+router.use("/reports", report_routes_1.default);
+router.use("/matches", match_routes_1.default);
+router.use("/dashboard", dashboard_routes_1.default);
+router.use("/notifications", notification_routes_1.default);
+router.use("/claims", claim_routes_1.default);
+router.use("/verification", verification_routes_1.default);
+exports.default = router;
