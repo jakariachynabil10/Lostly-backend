@@ -4,6 +4,7 @@ export interface AppError extends Error {
   statusCode?: number;
   code?: string;
   errors?: any;
+  retryAfterSeconds?: number;
 }
 
 export function errorHandler(
@@ -38,7 +39,9 @@ export function errorHandler(
       ? 409
       : err.statusCode || 500;
   const message =
-    statusCode >= 500
+    statusCode === 503 && err.code === "EMAIL_DELIVERY_UNAVAILABLE"
+      ? err.message
+      : statusCode >= 500
       ? "Internal server error"
       : isActiveClaimDuplicate
         ? "You already have an active claim for this match."
@@ -50,9 +53,27 @@ export function errorHandler(
     console.error("Unhandled request error:", { statusCode, code: err.code });
   }
 
-  res.status(statusCode).json({
+  const response: {
+    success: false;
+    message: string;
+    code?: string;
+    errors: any[];
+    retryAfterSeconds?: number;
+  } = {
     success: false,
     message,
     errors: Array.isArray(err.errors) ? err.errors : [],
-  });
+  };
+  if (
+    err.code === "EMAIL_NOT_VERIFIED" ||
+    err.code === "EMAIL_DELIVERY_UNAVAILABLE" ||
+    err.code === "RATE_LIMITED" ||
+    err.code === "TOO_MANY_ATTEMPTS"
+  ) {
+    response.code = err.code;
+  }
+  if (err.retryAfterSeconds !== undefined) {
+    response.retryAfterSeconds = err.retryAfterSeconds;
+  }
+  res.status(statusCode).json(response);
 }

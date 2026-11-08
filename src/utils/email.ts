@@ -1,5 +1,3 @@
-import { ENV } from "../config/env";
-
 export interface SendEmailOptions {
   to: string;
   subject: string;
@@ -7,41 +5,51 @@ export interface SendEmailOptions {
   html?: string;
 }
 
+function emailDeliveryError(message: string): Error & {
+  statusCode: number;
+  code: string;
+} {
+  return Object.assign(new Error(message), {
+    statusCode: 503,
+    code: "EMAIL_DELIVERY_UNAVAILABLE",
+  });
+}
+
 export async function sendEmailSafely(options: SendEmailOptions): Promise<void> {
   const resendApiKey = process.env.RESEND_API_KEY;
-  const smtpHost = process.env.SMTP_HOST;
 
-  // If no email service configured, silently skip as requested in specification
-  if (!resendApiKey && !smtpHost) {
+  if (!resendApiKey) {
     if (process.env.NODE_ENV === "development") {
-      console.log(`[Email Preview to: ${options.to}] Subject: ${options.subject}\nBody: ${options.text}`);
+      console.log(
+        `[Email Preview to: ${options.to}] Subject: ${options.subject}\nBody:\n${options.text}`,
+      );
+      return;
     }
-    return;
+
+    throw emailDeliveryError("Email delivery is not configured.");
   }
 
+  let response: Response;
   try {
-    if (resendApiKey) {
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${resendApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: process.env.EMAIL_FROM || "Lostly <notifications@lostly.com>",
-          to: [options.to],
-          subject: options.subject,
-          text: options.text,
-          html: options.html || `<p>${options.text.replace(/\n/g, "<br/>")}</p>`,
-        }),
-      });
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: process.env.EMAIL_FROM || "Lostly <notifications@lostly.com>",
+        to: [options.to],
+        subject: options.subject,
+        text: options.text,
+        html: options.html || `<p>${options.text.replace(/\n/g, "<br/>")}</p>`,
+      }),
+    });
+  } catch {
+    throw emailDeliveryError("Email delivery is unavailable. Please try again later.");
+  }
 
-      if (!response.ok) {
-        console.warn("[EmailService] Resend request returned non-OK status:", response.status);
-      }
-    }
-  } catch (err: any) {
-    // Specification: "If env vars are missing, skip silently and never fail the request."
-    console.warn("[EmailService] Error sending email (silently handled):", err.message);
+  if (!response.ok) {
+    throw emailDeliveryError("Email delivery is unavailable. Please try again later.");
   }
 }
