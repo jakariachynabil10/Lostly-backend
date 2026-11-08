@@ -13,7 +13,7 @@ export interface CreateClaimInput {
   matchId: string;
 }
 
-export type ClaimAction = "approve" | "reject" | "cancel" | "complete";
+export type ClaimAction = "approve"  | "reject" | "cancel" | "complete";
 
 export interface ClaimActionInput {
   action: ClaimAction;
@@ -164,6 +164,8 @@ export class ClaimService {
       err.statusCode = 400;
       throw err;
     }
+
+    
 
     // Reports must not already be RESOLVED or CLOSED
     if (
