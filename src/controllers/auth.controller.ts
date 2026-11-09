@@ -8,10 +8,46 @@ export class AuthController {
       const result = await AuthService.register(req.body);
       res.status(201).json({
         success: true,
-        message: "Account created successfully",
+        message: "Verification code sent",
         data: result,
       });
     } catch (error) {
+      next(error);
+    }
+  }
+
+  static async verifyEmail(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await AuthService.verifyEmail(req.body);
+      res.json({
+        success: true,
+        message: "Email verified successfully",
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async resendVerification(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await AuthService.resendVerification(req.body.email);
+      res.status(200).json({
+        success: true,
+        message: "If an account exists, a verification code has been sent.",
+        data: result,
+      });
+    } catch (error: any) {
+      if (error.statusCode === 429) {
+        res.status(429).json({
+          success: false,
+          message: error.message || "Please wait before requesting a new code.",
+          code: error.code,
+          retryAfterSeconds: error.retryAfterSeconds ?? 60,
+          errors: [],
+        });
+        return;
+      }
       next(error);
     }
   }

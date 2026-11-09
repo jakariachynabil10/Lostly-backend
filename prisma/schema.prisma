@@ -48,19 +48,34 @@ enum NotificationType {
 }
 
 model User {
-  id             String               @id @default(uuid())
-  name           String
-  email          String               @unique
-  password       String
-  profileImage   String?
-  reports        ItemReport[]
-  refreshTokens  RefreshToken[]
-  claimantClaims Claim[]              @relation("ClaimantClaims")
-  finderClaims   Claim[]              @relation("FinderClaims")
-  answers        VerificationAnswer[]
-  notifications  Notification[]
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  id                 String               @id @default(uuid())
+  name               String
+  email              String               @unique
+  password           String
+  profileImage       String?
+  emailVerifiedAt    DateTime?
+  reports            ItemReport[]
+  refreshTokens      RefreshToken[]
+  claimantClaims     Claim[]              @relation("ClaimantClaims")
+  finderClaims       Claim[]              @relation("FinderClaims")
+  answers            VerificationAnswer[]
+  notifications      Notification[]
+  emailCodes         EmailVerificationCode[]
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+}
+
+model EmailVerificationCode {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model RefreshToken {

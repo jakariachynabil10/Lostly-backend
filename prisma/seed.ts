@@ -40,23 +40,25 @@ async function main() {
 
   const demoUser = await prisma.user.upsert({
     where: { email: "demo@lostly.com" },
-    update: {},
+    update: { emailVerifiedAt: new Date() },
     create: {
       name: "Alex Rivera",
       email: "demo@lostly.com",
       password: hashedPassword,
       profileImage: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      emailVerifiedAt: new Date(),
     },
   });
 
   const finderUser = await prisma.user.upsert({
     where: { email: "finder@lostly.com" },
-    update: {},
+    update: { emailVerifiedAt: new Date() },
     create: {
       name: "Sam Finder",
       email: "finder@lostly.com",
       password: hashedPassword,
       profileImage: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      emailVerifiedAt: new Date(),
     },
   });
   console.log("Seeded demo users (demo@lostly.com / password123).");

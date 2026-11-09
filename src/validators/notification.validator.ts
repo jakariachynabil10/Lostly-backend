@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 export const getNotificationsQuerySchema = z.object({
-  page: z.string().optional().transform((val) => (val ? parseInt(val, 10) : 1)),
-  limit: z.string().optional().transform((val) => (val ? parseInt(val, 10) : 15)),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(15),
 });
 
 export const notificationIdParamSchema = z.object({
