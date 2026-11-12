@@ -30,7 +30,7 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env): void 
   });
 
   if (isProduction) {
-    const errors = [...invalidSecrets];
+    const errors: string[] = [...invalidSecrets];
     for (let index = 0; index < secretVariables.length; index += 1) {
       const variable = secretVariables[index];
       for (const otherVariable of secretVariables.slice(index + 1)) {
