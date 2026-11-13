@@ -1,6 +1,7 @@
 import { createServer } from "http";
 import { app } from "../src/app";
 import { prisma } from "../src/prisma";
+import { hashPassword } from "../src/utils/password";
 
 interface ApiResponse {
   success: boolean;
@@ -13,11 +14,6 @@ async function main() {
   const server = createServer(app);
   const createdUserIds: string[] = [];
   let createdCategoryId: string | undefined;
-  const previousResendKey = process.env.RESEND_API_KEY;
-  const previousSmtpHost = process.env.SMTP_HOST;
-  delete process.env.RESEND_API_KEY;
-  delete process.env.SMTP_HOST;
-  process.env.NODE_ENV = "test";
 
   try {
     await new Promise<void>((resolve) =>
@@ -62,29 +58,36 @@ async function main() {
     }
 
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    async function register(letter: string) {
-      const result = requireStatus(
-        await call("POST", "/auth/register", undefined, {
+    async function createScenarioUser(letter: string) {
+      const email = `phase2-${letter.toLowerCase()}-${suffix}@example.test`;
+      const password = "Scenario-pass-2026";
+      const user = await prisma.user.create({
+        data: {
           name: `Scenario ${letter}`,
-          email: `phase2-${letter.toLowerCase()}-${suffix}@example.test`,
-          password: "Scenario-pass-2026",
-        }),
-        201,
-        `register ${letter}`,
+          email,
+          password: await hashPassword(password),
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true, email: true },
+      });
+      createdUserIds.push(user.id);
+
+      const login = requireStatus(
+        await call("POST", "/auth/login", undefined, { email, password }),
+        200,
+        `login ${letter}`,
       );
-      createdUserIds.push(result.data.user.id);
+
       return {
-        id: result.data.user.id as string,
-        email: result.data.user.email as string,
-        token: result.data.accessToken as string,
+        id: user.id,
+        email: user.email,
+        token: login.data.accessToken as string,
       };
     }
 
-    const [a, b, c] = await Promise.all([
-      register("A"),
-      register("B"),
-      register("C"),
-    ]);
+    const a = await createScenarioUser("A");
+    const b = await createScenarioUser("B");
+    const c = await createScenarioUser("C");
     let category = await prisma.category.findFirst();
     if (!category) {
       category = await prisma.category.create({
@@ -398,10 +401,6 @@ async function main() {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    if (previousResendKey === undefined) delete process.env.RESEND_API_KEY;
-    else process.env.RESEND_API_KEY = previousResendKey;
-    if (previousSmtpHost === undefined) delete process.env.SMTP_HOST;
-    else process.env.SMTP_HOST = previousSmtpHost;
     await prisma.$disconnect();
   }
 }

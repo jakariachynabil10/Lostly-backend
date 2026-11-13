@@ -1,6 +1,8 @@
 import { app } from "./app";
-import { ENV } from "./config/env";
+import { ENV, validateEnvironment } from "./config/env";
 import { prisma } from "./prisma";
+
+validateEnvironment();
 
 const server = app.listen(ENV.PORT, () => {
   console.log(`🚀 Lostly Backend Server running on http://localhost:${ENV.PORT}`);
